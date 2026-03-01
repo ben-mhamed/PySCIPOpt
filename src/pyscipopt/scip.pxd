@@ -475,7 +475,7 @@ cdef extern from "scip/scip.h":
         pass
 
     ctypedef struct SCIP_BRANCHRULE:
-        pass
+        SCIP_RETCODE (*branchexeclp) (SCIP* scip, SCIP_BRANCHRULE* branchrule, SCIP_Bool allowaddcons, SCIP_RESULT* result)
 
     ctypedef struct SCIP_BRANCHRULEDATA:
         pass
@@ -883,6 +883,15 @@ cdef extern from "scip/scip.h":
                                    SCIP_Bool* infeasible,
                                    SCIP_Bool* redundant,
                                    SCIP_Bool* aggregated)
+    
+    # --- Custom Feature Extraction API ---
+    SCIP_Real SCIPgetVarPseudocostCountCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetVarAvgCutoffsCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetVarAvgConflictlengthCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetVarAvgInferencesCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    int SCIPgetNCliques(SCIP* scip)
+    int SCIPvarGetNImpls(SCIP_VAR* var, SCIP_Bool varfixing)
+    int SCIPvarGetNCliques(SCIP_VAR* var, SCIP_Bool varfixing)
 
     # LP Methods
     SCIP_RETCODE SCIPgetLPColsData(SCIP* scip, SCIP_COL*** cols, int* ncols)
