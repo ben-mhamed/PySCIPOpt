@@ -1454,6 +1454,7 @@ cdef extern from "scip/scip.h":
     SCIP_Bool SCIPisIntegral(SCIP* scip, SCIP_Real val)
     SCIP_Real SCIPgetTreesizeEstimation(SCIP* scip)
 
+
     # Exact SCIP methods
     SCIP_RETCODE SCIPenableExactSolving(SCIP* scip, SCIP_Bool enable);
     SCIP_Bool SCIPisExact(SCIP* scip);
