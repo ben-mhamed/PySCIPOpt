@@ -12650,6 +12650,7 @@ cdef class Model:
         else:
             mip_state_view[16] = np.log(pd_integral)
 
+        # Gap logic approximation
         current_gap = SCIPgetGap(self._scip)
         if SCIPisInfinity(self._scip, current_gap):
             mip_state_view[17:20] = 0.
@@ -12690,6 +12691,7 @@ cdef class Model:
         open_depths = np.empty([nleaves + nchildren + nsiblings], dtype = np.double)
         cdef double[::1] open_depths_view = open_depths
 
+        # Access SCIP_NODE array elements correctly using SCIP API methods
         if nleaves + nchildren + nsiblings != 0:
             for i in range(nleaves):
                 open_lowerbounds_view[i] = SCIPnodeGetLowerbound(leaves[i])

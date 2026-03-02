@@ -1446,12 +1446,15 @@ cdef extern from "scip/scip.h":
     SCIP_Real SCIPgetTreesizeEstimation(SCIP* scip)
 
     # --- Custom Feature Extraction API ---
+    SCIP_NODE* SCIPgetRootNode(SCIP* scip)
     SCIP_Longint SCIPgetNNodesLeft(SCIP* scip)
     SCIP_Longint SCIPbranchruleGetNCutoffs(SCIP_BRANCHRULE* branchrule)
     SCIP_Longint SCIPbranchruleGetNDomredsFound(SCIP_BRANCHRULE* branchrule)
     SCIP_Longint SCIPgetNNodeLPs(SCIP* scip)
     SCIP_Longint SCIPgetNObjlimLeaves(SCIP* scip)
     SCIP_Longint SCIPgetNBacktracks(SCIP* scip)
+    SCIP_Real SCIPgetLowerboundRoot(SCIP* scip)
+    SCIP_Real SCIPgetUpperbound(SCIP* scip)
     SCIP_Real SCIPgetAvgLowerbound(SCIP* scip)
     SCIP_Bool SCIPisPrimalboundSol(SCIP* scip)
     SCIP_Real SCIPgetAvgConflictScore(SCIP* scip)
