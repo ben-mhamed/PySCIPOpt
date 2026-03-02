@@ -475,7 +475,7 @@ cdef extern from "scip/scip.h":
         pass
 
     ctypedef struct SCIP_BRANCHRULE:
-        SCIP_RETCODE (*branchexeclp) (SCIP* scip, SCIP_BRANCHRULE* branchrule, SCIP_Bool allowaddcons, SCIP_RESULT* result)
+        pass
 
     ctypedef struct SCIP_BRANCHRULEDATA:
         pass

@@ -41,6 +41,22 @@ include "relax.pxi"
 include "nodesel.pxi"
 include "matrix.pxi"
 
+# --- C HACK TO BYPASS OPAQUE STRUCT FOR BRANCHING ---
+cdef extern from *:
+    """
+    #include "scip/scip.h"
+    #include "scip/struct_branch.h"
+    
+    static SCIP_RETCODE execute_branchrule_ext(SCIP* scip, SCIP_BRANCHRULE* branchrule, SCIP_Bool allowaddcons, SCIP_RESULT* result) {
+        if (branchrule != NULL && branchrule->branchexeclp != NULL) {
+            return branchrule->branchexeclp(scip, branchrule, allowaddcons, result);
+        }
+        *result = SCIP_DIDNOTRUN;
+        return SCIP_OKAY;
+    }
+    """
+    int execute_branchrule_ext(SCIP* scip, SCIP_BRANCHRULE* branchrule, bint allowaddcons, SCIP_RESULT* result)
+# ----------------------------------------------------
 # recommended SCIP version; major version is required
 MAJOR = 10
 MINOR = 0
@@ -12829,7 +12845,7 @@ cdef class Model:
             print("Error, branching rule not found!")
             return PY_SCIP_RESULT.DIDNOTFIND
         else:
-            branchrule.branchexeclp(self._scip, branchrule, allowaddcons, &result)
+            PY_SCIP_CALL(execute_branchrule_ext(self._scip, branchrule, allowaddcons, &result))
             return result
 
 
