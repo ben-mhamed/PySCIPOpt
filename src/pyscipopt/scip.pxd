@@ -475,7 +475,7 @@ cdef extern from "scip/scip.h":
         pass
 
     ctypedef struct SCIP_BRANCHRULE:
-        pass
+        SCIP_RETCODE (*branchexeclp) (SCIP* scip, SCIP_BRANCHRULE* branchrule, SCIP_Bool allowaddcons, SCIP_RESULT* result)
 
     ctypedef struct SCIP_BRANCHRULEDATA:
         pass
@@ -1445,6 +1445,35 @@ cdef extern from "scip/scip.h":
     SCIP_Bool SCIPisIntegral(SCIP* scip, SCIP_Real val)
     SCIP_Real SCIPgetTreesizeEstimation(SCIP* scip)
 
+    # --- Custom Feature Extraction API ---
+    SCIP_Longint SCIPgetNNodesLeft(SCIP* scip)
+    SCIP_Longint SCIPbranchruleGetNCutoffs(SCIP_BRANCHRULE* branchrule)
+    SCIP_Longint SCIPbranchruleGetNDomredsFound(SCIP_BRANCHRULE* branchrule)
+    SCIP_Longint SCIPgetNNodeLPs(SCIP* scip)
+    SCIP_Longint SCIPgetNObjlimLeaves(SCIP* scip)
+    SCIP_Longint SCIPgetNBacktracks(SCIP* scip)
+    SCIP_Real SCIPgetAvgLowerbound(SCIP* scip)
+    SCIP_Bool SCIPisPrimalboundSol(SCIP* scip)
+    SCIP_Real SCIPgetAvgConflictScore(SCIP* scip)
+    SCIP_Real SCIPgetAvgConflictlengthScore(SCIP* scip)
+    SCIP_Real SCIPgetAvgInferenceScore(SCIP* scip)
+    SCIP_Real SCIPgetAvgCutoffScore(SCIP* scip)
+    SCIP_Real SCIPgetAvgPseudocostScore(SCIP* scip)
+    SCIP_Real SCIPgetAvgCutoffs(SCIP* scip, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetAvgInferences(SCIP* scip, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetPseudocostVariance(SCIP* scip, SCIP_BRANCHDIR dir, SCIP_Bool onlyprimal)
+    SCIP_Longint SCIPgetNConflictConssApplied(SCIP* scip)
+    int SCIPgetNCliques(SCIP* scip)
+    SCIP_Real SCIPgetVarConflictScore(SCIP* scip, SCIP_VAR* var)
+    SCIP_Real SCIPgetVarConflictlengthScore(SCIP* scip, SCIP_VAR* var)
+    SCIP_Real SCIPgetVarAvgInferenceScore(SCIP* scip, SCIP_VAR* var)
+    SCIP_Real SCIPgetVarAvgCutoffScore(SCIP* scip, SCIP_VAR* var)
+    SCIP_Real SCIPgetPseudocostCount(SCIP* scip, SCIP_BRANCHDIR dir, SCIP_Bool onlyprimal)
+    SCIP_Real SCIPgetVarPseudocostCountCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetVarAvgCutoffsCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetVarAvgConflictlengthCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+    SCIP_Real SCIPgetVarAvgInferencesCurrentRun(SCIP* scip, SCIP_VAR* var, SCIP_BRANCHDIR dir)
+
     # Exact SCIP methods
     SCIP_RETCODE SCIPenableExactSolving(SCIP* scip, SCIP_Bool enable);
     SCIP_Bool SCIPisExact(SCIP* scip);
@@ -2257,3 +2286,9 @@ cdef class Model:
 
     @staticmethod
     cdef create(SCIP* scip)
+
+
+cdef extern from "scip/pub_var.h":
+    int SCIPvarGetNImpls(SCIP_VAR* var, SCIP_Bool varfixing)
+    int SCIPvarGetNCliques(SCIP_VAR* var, SCIP_Bool varfixing)
+    SCIP_Real SCIPvarGetAvgBranchdepthCurrentRun(SCIP_VAR* var, SCIP_BRANCHDIR dir)

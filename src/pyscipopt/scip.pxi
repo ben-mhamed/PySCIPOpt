@@ -12503,6 +12503,334 @@ cdef class Model:
         return (col_features, edge_features, row_features,
                 {"col": col_feature_map, "edge": edge_feature_map, "row": row_feature_map})
 
+    # =========================================================================
+    # Custom Feature Extraction & Branching Methods
+    # =========================================================================
+
+    def getNCreatedNodes(self):
+        """Return total number of nodes created."""
+        return SCIPgetNTotalNodes(self._scip)
+
+    def getNCreatedNodesRun(self):
+        """Return number of nodes created in current run."""
+        return SCIPgetNNodes(self._scip) + SCIPgetNNodesLeft(self._scip)
+        
+    def getNumLPBranchCands(self):
+        """Get the number of branching candidates from the LP relaxation."""
+        cdef SCIP_VAR** lpcands
+        cdef SCIP_Real* lpcandssol
+        cdef SCIP_Real* lpcandsfrac
+        cdef int nlpcands
+        cdef int npriolpcands
+        cdef int nfracimplvars
+        PY_SCIP_CALL(SCIPgetLPBranchCands(self._scip, &lpcands, &lpcandssol, &lpcandsfrac, &nlpcands, &npriolpcands, &nfracimplvars))
+        return nlpcands
+
+    def relPosition(self, node_bound, ub, lb):
+        """Relative position of node_bound with respect to global upper and lower bounds (or other commensurable quantities)."""
+        if SCIPisInfinity(self._scip, ub):
+            return 0.
+        else:
+            return np.abs(ub - node_bound) / np.abs(ub -lb)
+    
+    def relDistance(self, x, y):
+        """Relative distance between x and y."""
+        if x*y<0:
+            return 0.
+        else:
+            return np.abs(x-y) / np.max([np.abs(x), np.abs(y), 1e-10])
+    
+    def gNormMax(self, x):
+        """Normalizer function g(x) (cf. T. Achterberg PhD Thesis)."""
+        gx = x/(x+1.)
+        return np.max([gx, 0.1])
+        
+    def getVarScore(self, varscore, avgscore):
+        """Returns a branching variable score with respect to the average one."""
+        maxavg = np.max([avgscore, 0.1])
+        return 1 - (1 / (1 + varscore / maxavg))
+        
+    def getFairNNodes(self, brancher_name):
+        """Returns the number of fair nodes for the specified branching rule."""
+        brancher = SCIPfindBranchrule(self._scip, brancher_name.encode("UTF-8"))
+        fair = SCIPgetNNodes(self._scip) + 2*SCIPbranchruleGetNCutoffs(brancher) + 2*SCIPbranchruleGetNDomredsFound(brancher)
+        return fair    
+      
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def getNodeState(self, node_dim):
+        """Get Node state representation."""
+        node_state = np.empty(node_dim, dtype=np.double)
+        cdef double[::1] node_state_view = node_state
+
+        cdef SCIP_NODE* node = SCIPgetCurrentNode(self._scip)
+        domchg = SCIPnodeGetDomchg(node)
+        nboundchgs = SCIPdomchgGetNBoundchgs(domchg)
+
+        if node == SCIPgetRootNode(self._scip):
+            isRoot = True
+        else:
+            isRoot = False
+
+        if isRoot:
+            node_state_view[0:2] = 0.
+        else:
+            node_state_view[0] = float(SCIPnodeGetDepth(node)) / SCIPgetMaxDepth(self._scip)
+            node_state_view[1] = float(SCIPgetPlungeDepth(self._scip)) / SCIPnodeGetDepth(node)
+                  
+        node_state_view[2] = self.relDistance(SCIPgetLowerbound(self._scip), SCIPgetLPObjval(self._scip))
+        node_state_view[3] = self.relDistance(SCIPgetLowerboundRoot(self._scip), SCIPgetLPObjval(self._scip))
+        
+        if SCIPisInfinity(self._scip, SCIPgetUpperbound(self._scip)):
+            node_state_view[4:6] = 0.
+        else:
+            node_state_view[4] = self.relDistance(SCIPgetUpperbound(self._scip), SCIPgetLPObjval(self._scip))
+            node_state_view[5] = self.relPosition(node_bound=SCIPgetLPObjval(self._scip), ub=SCIPgetUpperbound(self._scip), lb=SCIPgetLowerbound(self._scip)) 
+        
+        node_state_view[6] = float(self.getNumLPBranchCands()) / self.getNDiscreteVars()
+        node_state_view[7] = float(nboundchgs) / SCIPgetNVars(self._scip)
+        
+        return node_state
+        
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def getMIPState(self, mip_dim):
+        """Get MIP state representation."""
+        mip_state = np.empty(mip_dim, dtype=np.double)
+        cdef double[::1] mip_state_view = mip_state
+
+        cdef SCIP_NODE** leaves
+        cdef SCIP_NODE** children
+        cdef SCIP_NODE** siblings
+        cdef int nleaves
+        cdef int nchildren
+        cdef int nsiblings
+        PY_SCIP_CALL(SCIPgetOpenNodesData(self._scip, &leaves, &children, &siblings, &nleaves, &nchildren, &nsiblings))
+
+        if SCIPgetCurrentNode(self._scip) == SCIPgetRootNode(self._scip):
+            isRoot = True
+        else:
+            isRoot = False
+        
+        if isRoot:
+            mip_state_view[:8] = 0.
+            mip_state_view[8:12] = 0.
+            mip_state_view[12:15] = 0.
+            if SCIPgetNLPs(self._scip) != 0:
+                mip_state_view[15] = float(SCIPgetNNodeLPs(self._scip)) / SCIPgetNLPs(self._scip)
+            else:
+                mip_state_view[15] = 0.
+        else:
+            all_leaves = SCIPgetNObjlimLeaves(self._scip) + SCIPgetNFeasibleLeaves(self._scip) + SCIPgetNInfeasibleLeaves(self._scip)
+            if all_leaves == 0:
+                mip_state_view[:3] = 0.
+            else:
+                mip_state_view[0] = float(SCIPgetNObjlimLeaves(self._scip)) / all_leaves 
+                mip_state_view[1] = float(SCIPgetNInfeasibleLeaves(self._scip)) / all_leaves 
+                mip_state_view[2] = float(SCIPgetNFeasibleLeaves(self._scip)) / all_leaves 
+            mip_state_view[3] = float((SCIPgetNInfeasibleLeaves(self._scip) + 1.0) / (SCIPgetNObjlimLeaves(self._scip) + 1.0)) 
+            mip_state_view[4] = float(SCIPgetNNodesLeft(self._scip)) / SCIPgetNNodes(self._scip) 
+            mip_state_view[5] = float(all_leaves) / SCIPgetNNodes(self._scip)
+            mip_state_view[6] = float(SCIPgetNNodes(self._scip) - SCIPgetNLeaves(self._scip)) / SCIPgetNNodes(self._scip)
+            mip_state_view[7] = float(SCIPgetNNodes(self._scip)) / SCIPgetNTotalNodes(self._scip)
+
+            mip_state_view[8] = 0.0 # stat.nactivatednodes hidden in SCIP 8+
+            mip_state_view[9] = 0.0 # stat.ndeactivatednodes hidden in SCIP 8+
+            mip_state_view[10] = float(SCIPgetPlungeDepth(self._scip)) / SCIPgetMaxDepth(self._scip)
+            mip_state_view[11] = float(SCIPgetNBacktracks(self._scip)) / SCIPgetNNodes(self._scip)
+
+            mip_state_view[12] = np.log(float(SCIPgetNLPIterations(self._scip)) / SCIPgetNNodes(self._scip))
+            mip_state_view[13] = np.log(float(SCIPgetNLPs(self._scip)) / SCIPgetNNodes(self._scip)) 
+            mip_state_view[14] = float(SCIPgetNNodes(self._scip)) / SCIPgetNLPs(self._scip) 
+            mip_state_view[15] = float(SCIPgetNNodeLPs(self._scip)) / SCIPgetNLPs(self._scip)
+            
+        pd_integral = SCIPgetPrimalDualIntegral(self._scip)
+        if pd_integral == 0:
+            mip_state_view[16] = 0.
+        else:
+            mip_state_view[16] = np.log(pd_integral)
+
+        current_gap = SCIPgetGap(self._scip)
+        if SCIPisInfinity(self._scip, current_gap):
+            mip_state_view[17:20] = 0.
+        else:    
+            mip_state_view[17] = 1.0 # using dummy val since lastsolgap is private
+            mip_state_view[18] = 1.0 # using dummy val since firstsolgap is private
+            mip_state_view[19] = 1.0
+        
+        mip_state_view[20] = self.relDistance(SCIPgetLowerboundRoot(self._scip), SCIPgetLowerbound(self._scip))
+        mip_state_view[21] = self.relDistance(SCIPgetLowerboundRoot(self._scip), SCIPgetAvgLowerbound(self._scip))
+        if SCIPisInfinity(self._scip, SCIPgetUpperbound(self._scip)):
+            mip_state_view[22] = 0.
+        else:
+            mip_state_view[22] = self.relDistance(SCIPgetUpperbound(self._scip), SCIPgetLowerbound(self._scip)) 
+
+        mip_state_view[23] = float(SCIPisPrimalboundSol(self._scip))
+        if isRoot:
+            mip_state_view[24] = 0.
+        else:
+            mip_state_view[24] = 0.0 # using dummy val since nnodesbeforefirst is private
+        
+        mip_state_view[25] = self.gNormMax(SCIPgetAvgConflictScore(self._scip))
+        mip_state_view[26] = self.gNormMax(SCIPgetAvgConflictlengthScore(self._scip))
+        mip_state_view[27] = self.gNormMax(SCIPgetAvgInferenceScore(self._scip))
+        mip_state_view[28] = self.gNormMax(SCIPgetAvgCutoffScore(self._scip))
+        mip_state_view[29] = self.gNormMax(SCIPgetAvgPseudocostScore(self._scip))
+        
+        mip_state_view[30] = self.gNormMax(SCIPgetAvgCutoffs(self._scip, SCIP_BRANCHDIR_UPWARDS)) 
+        mip_state_view[31] = self.gNormMax(SCIPgetAvgCutoffs(self._scip, SCIP_BRANCHDIR_DOWNWARDS))
+        mip_state_view[32] = self.gNormMax(SCIPgetAvgInferences(self._scip, SCIP_BRANCHDIR_UPWARDS))
+        mip_state_view[33] = self.gNormMax(SCIPgetAvgInferences(self._scip, SCIP_BRANCHDIR_DOWNWARDS))
+        mip_state_view[34] = self.gNormMax(SCIPgetPseudocostVariance(self._scip, SCIP_BRANCHDIR_UPWARDS, 1))
+        mip_state_view[35] = self.gNormMax(SCIPgetPseudocostVariance(self._scip, SCIP_BRANCHDIR_DOWNWARDS, 1))
+        mip_state_view[36] = self.gNormMax(SCIPgetNConflictConssApplied(self._scip)) 
+        
+        open_lowerbounds = np.empty([nleaves + nchildren + nsiblings], dtype = np.double)
+        cdef double[::1] open_lowerbounds_view = open_lowerbounds
+        open_depths = np.empty([nleaves + nchildren + nsiblings], dtype = np.double)
+        cdef double[::1] open_depths_view = open_depths
+
+        if nleaves + nchildren + nsiblings != 0:
+            for i in range(nleaves):
+                open_lowerbounds_view[i] = SCIPnodeGetLowerbound(leaves[i])
+                open_depths_view[i] = SCIPnodeGetDepth(leaves[i])
+            for i in range(nchildren):
+                open_lowerbounds_view[nleaves+i] = SCIPnodeGetLowerbound(children[i])
+                open_depths_view[nleaves+i] = SCIPnodeGetDepth(children[i])
+            for i in range(nsiblings):
+                open_lowerbounds_view[nleaves+nchildren+i] = SCIPnodeGetLowerbound(siblings[i])
+                open_depths_view[nleaves+nchildren+i] = SCIPnodeGetDepth(siblings[i])
+        
+            mip_state_view[37] = float(len(np.argwhere(open_lowerbounds == np.min(open_lowerbounds)))) / len(open_lowerbounds) 
+            mip_state_view[38] = float(len(np.argwhere(open_lowerbounds == np.max(open_lowerbounds)))) / len(open_lowerbounds)
+            mip_state_view[39] = self.relDistance(SCIPgetLowerbound(self._scip), np.max(open_lowerbounds))
+            mip_state_view[40] = self.relDistance(np.min(open_lowerbounds), np.max(open_lowerbounds)) 
+            if SCIPisInfinity(self._scip, SCIPgetUpperbound(self._scip)):
+                mip_state_view[41:46] = 0.
+            else:
+                mip_state_view[41] = self.relDistance(np.min(open_lowerbounds), SCIPgetUpperbound(self._scip))
+                mip_state_view[42] = self.relDistance(np.max(open_lowerbounds), SCIPgetUpperbound(self._scip))
+                mip_state_view[43] = self.relPosition(node_bound=np.mean(open_lowerbounds), ub=SCIPgetUpperbound(self._scip), lb=SCIPgetLowerbound(self._scip)) 
+                mip_state_view[44] = self.relPosition(node_bound=np.min(open_lowerbounds), ub=SCIPgetUpperbound(self._scip), lb=SCIPgetLowerbound(self._scip)) 
+                mip_state_view[45] = self.relPosition(node_bound=np.max(open_lowerbounds), ub=SCIPgetUpperbound(self._scip), lb=SCIPgetLowerbound(self._scip)) 
+            
+            lb_q1 = np.quantile(open_lowerbounds, 0.25)
+            lb_q3 = np.quantile(open_lowerbounds, 0.75)
+            mip_state_view[46] = self.relDistance(lb_q1, lb_q3) 
+            if np.mean(open_lowerbounds) == 0:
+                mip_state_view[47] = 0.
+            else: 
+                mip_state_view[47] = np.std(open_lowerbounds)/np.mean(open_lowerbounds)
+            if lb_q1 + lb_q3 == 0:
+                mip_state_view[48] = 0.
+            else:
+                mip_state_view[48] = (lb_q3 - lb_q1)/(lb_q3 + lb_q1)
+                
+            d_q1 = np.quantile(open_depths, 0.25)
+            d_q3 = np.quantile(open_depths, 0.75)
+            if SCIPgetMaxDepth(self._scip) == 0: 
+                mip_state_view[49] = 0.
+            else:
+                mip_state_view[49] = float(np.mean(open_depths)) / SCIPgetMaxDepth(self._scip)
+            mip_state_view[50] = self.relDistance(d_q1, d_q3)
+            if np.mean(open_depths) == 0:
+                mip_state_view[51] = 0.
+            else: 
+                mip_state_view[51] = np.std(open_depths)/np.mean(open_depths)
+            if d_q1 + d_q3 == 0:
+                mip_state_view[52] = 0.
+            else:
+                mip_state_view[52] = (d_q3 - d_q1)/(d_q3 + d_q1)
+        else:
+            mip_state_view[37:] = 0.
+        
+        return mip_state
+        
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def getCandsState(self, var_dim, branch_count):
+        """Get candidate variables state representation."""
+        cdef SCIP_VAR** lpcands
+        cdef SCIP_Real* lpcandssol
+        cdef SCIP_Real* lpcandsfrac
+        cdef int nlpcands
+        cdef int npriolpcands
+        cdef int nfracimplvars
+        PY_SCIP_CALL(SCIPgetLPBranchCands(self._scip, &lpcands, &lpcandssol, &lpcandsfrac, &nlpcands, &npriolpcands, &nfracimplvars))
+
+        cands_state_mat = np.empty((nlpcands, var_dim), dtype=np.double)
+        cdef double[:, ::1] cands_state_mat_view = cands_state_mat
+        cdef size_t i = 0
+    
+        for i in range(nlpcands):
+            cands_state_mat_view[i][0] = lpcandsfrac[i]
+            cands_state_mat_view[i][1] = SCIPvarGetAvgSol(lpcands[i])
+            if SCIPgetMaxDepth(self._scip) == 0:
+                cands_state_mat_view[i][2:4] = 0.
+            else:
+                cands_state_mat_view[i][2] = 1 - (SCIPvarGetAvgBranchdepthCurrentRun(lpcands[i], SCIP_BRANCHDIR_UPWARDS) / SCIPgetMaxDepth(self._scip))
+                cands_state_mat_view[i][3] = 1 - (SCIPvarGetAvgBranchdepthCurrentRun(lpcands[i], SCIP_BRANCHDIR_DOWNWARDS) / SCIPgetMaxDepth(self._scip))
+            
+            cands_state_mat_view[i][4] = self.getVarScore(SCIPgetVarConflictScore(self._scip, lpcands[i]), SCIPgetAvgConflictScore(self._scip))
+            cands_state_mat_view[i][5] = self.getVarScore(SCIPgetVarConflictlengthScore(self._scip, lpcands[i]), SCIPgetAvgConflictlengthScore(self._scip))
+            cands_state_mat_view[i][6] = self.getVarScore(SCIPgetVarAvgInferenceScore(self._scip, lpcands[i]), SCIPgetAvgInferenceScore(self._scip))
+            cands_state_mat_view[i][7] = self.getVarScore(SCIPgetVarAvgCutoffScore(self._scip, lpcands[i]), SCIPgetAvgCutoffScore(self._scip))
+            cands_state_mat_view[i][8] = self.getVarScore(SCIPgetVarPseudocostScore(self._scip, lpcands[i], lpcandssol[i]), SCIPgetAvgPseudocostScore(self._scip))
+            
+            if SCIPgetPseudocostCount(self._scip, SCIP_BRANCHDIR_UPWARDS, 1) == 0:
+                cands_state_mat_view[i][9] = 0.
+            else:
+                cands_state_mat_view[i][9] = SCIPgetVarPseudocostCountCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_UPWARDS) / SCIPgetPseudocostCount(self._scip, SCIP_BRANCHDIR_UPWARDS, 1)
+            if SCIPgetPseudocostCount(self._scip, SCIP_BRANCHDIR_DOWNWARDS, 1) == 0:
+                cands_state_mat_view[i][10] = 0.
+            else: 
+                cands_state_mat_view[i][10] = SCIPgetVarPseudocostCountCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_DOWNWARDS) / SCIPgetPseudocostCount(self._scip, SCIP_BRANCHDIR_DOWNWARDS, 1)
+            
+            if SCIPvarGetNBranchingsCurrentRun(lpcands[i], SCIP_BRANCHDIR_UPWARDS) == 0:
+                cands_state_mat_view[i][11] = 0.
+            else:
+                cands_state_mat_view[i][11] = SCIPgetVarPseudocostCountCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_UPWARDS) / SCIPvarGetNBranchingsCurrentRun(lpcands[i], SCIP_BRANCHDIR_UPWARDS)
+            if SCIPvarGetNBranchingsCurrentRun(lpcands[i], SCIP_BRANCHDIR_DOWNWARDS) == 0:
+                cands_state_mat_view[i][12] = 0.
+            else:
+                cands_state_mat_view[i][12] = SCIPgetVarPseudocostCountCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_DOWNWARDS) / SCIPvarGetNBranchingsCurrentRun(lpcands[i], SCIP_BRANCHDIR_DOWNWARDS) 
+            
+            if branch_count == 0:
+                cands_state_mat_view[i][13:15] = 0.
+            else:
+                cands_state_mat_view[i][13] = SCIPgetVarPseudocostCountCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_UPWARDS) / branch_count 
+                cands_state_mat_view[i][14] = SCIPgetVarPseudocostCountCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_DOWNWARDS) / branch_count 
+
+            cands_state_mat_view[i][15] = SCIPvarGetNImpls(lpcands[i], 0) 
+            cands_state_mat_view[i][16] = SCIPvarGetNImpls(lpcands[i], 1) 
+
+            if SCIPgetNCliques(self._scip) == 0:
+                cands_state_mat_view[i][17:19] = 0.
+            else:
+                cands_state_mat_view[i][17] = SCIPvarGetNCliques(lpcands[i], 0) / SCIPgetNCliques(self._scip) 
+                cands_state_mat_view[i][18] = SCIPvarGetNCliques(lpcands[i], 1) / SCIPgetNCliques(self._scip) 
+
+            cands_state_mat_view[i][19] = self.gNormMax(SCIPgetVarAvgCutoffsCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_UPWARDS))
+            cands_state_mat_view[i][20] = self.gNormMax(SCIPgetVarAvgCutoffsCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_DOWNWARDS))
+            cands_state_mat_view[i][21] = self.gNormMax(SCIPgetVarAvgConflictlengthCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_UPWARDS))
+            cands_state_mat_view[i][22] = self.gNormMax(SCIPgetVarAvgConflictlengthCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_DOWNWARDS))
+            cands_state_mat_view[i][23] = self.gNormMax(SCIPgetVarAvgInferencesCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_UPWARDS))
+            cands_state_mat_view[i][24] = self.gNormMax(SCIPgetVarAvgInferencesCurrentRun(self._scip, lpcands[i], SCIP_BRANCHDIR_DOWNWARDS))
+            
+        return [self._getOrCreateVar(lpcands[i]) for i in range(nlpcands)], [SCIPcolGetLPPos(SCIPvarGetCol(lpcands[i])) for i in range(nlpcands)], cands_state_mat
+
+    def executeBranchRule(self, str name, allowaddcons):
+        cdef SCIP_BRANCHRULE* branchrule
+        cdef SCIP_RESULT result
+        branchrule = SCIPfindBranchrule(self._scip, name.encode("UTF-8"))
+        if branchrule == NULL:
+            print("Error, branching rule not found!")
+            return PY_SCIP_RESULT.DIDNOTFIND
+        else:
+            branchrule.branchexeclp(self._scip, branchrule, allowaddcons, &result)
+            return result
+
+
 @dataclass
 class Statistics:
     """
